@@ -14,7 +14,7 @@
 2. 将`resource`文件夹下的`mywireshark_plugin.lua`脚本拷贝到`Wireshark`的插件目录`/wireshark/plugins`.
 3. 配置环境变量，将`Wireshark`目录添加到`path`中，终端输入`tshark`可以正常运行即可。
 + 配置`libtshark`运行文件
-参考`config/tsharkprocess.json`定制`libtshark`报文分析行为.具体参数含义见下文，也可以参考[tshark官网](https://www.wireshark.org/docs/man-pages/tshark.html)`
+参考`config/tsharkprocess.json`定制`libtshark`报文分析行为.具体参数含义见下文，也可以参考[tshark官网](https://www.wireshark.org/docs/man-pages/tshark.html)
 
 + 运行
 
