@@ -1,0 +1,25 @@
+{
+  "args": [
+    {
+      "protocol": ["s7comm"],
+      "filterFields": [
+        "s7comm.param.userdata.funcgroup",
+        "s7comm.param.func"
+      ],
+      "showConsole": false
+    }
+  ],
+  "undefined": true,
+  "iFace": "\\Device\\NPF_{85B3D44A-D5EF-4256-97A3-2002C1D08DB3}",
+  "restartProcess": 340,
+  "debug": true,
+  "dumpcap": {
+    "iFace" : "\\Device\\NPF_{235EDB77-6B88-41E1-8C1E-29DB35754E3D}",
+    "tmpFile" : "C:\\Users\\zjucsc\\Desktop\\dumpcap_tmp\\tmp",
+    "fileSize" : 100000
+  },
+  "zk": {
+    "address" : "localhost",
+    "port" : 9090
+  }
+}
