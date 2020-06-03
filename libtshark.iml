@@ -43,6 +43,8 @@
     <orderEntry type="library" name="Maven: com.google.errorprone:error_prone_annotations:2.2.0" level="project" />
     <orderEntry type="library" name="Maven: com.google.j2objc:j2objc-annotations:1.1" level="project" />
     <orderEntry type="library" name="Maven: org.codehaus.mojo:animal-sniffer-annotations:1.17" level="project" />
+    <orderEntry type="library" name="Maven: com.zjucsc:zjucsc-dp-common:1.0.0-RELEASES" level="project" />
+    <orderEntry type="library" name="Maven: org.javassist:javassist:3.27.0-GA" level="project" />
     <orderEntry type="library" name="Maven: commons-codec:commons-codec:1.14" level="project" />
     <orderEntry type="library" scope="TEST" name="Maven: org.junit.jupiter:junit-jupiter-api:5.6.2" level="project" />
     <orderEntry type="library" scope="TEST" name="Maven: org.apiguardian:apiguardian-api:1.1.0" level="project" />

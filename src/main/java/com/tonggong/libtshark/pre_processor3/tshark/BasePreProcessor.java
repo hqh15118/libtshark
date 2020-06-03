@@ -1,10 +1,24 @@
 package com.tonggong.libtshark.pre_processor3.tshark;
 
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.zjucsc.common.config.TsharkConfig;
+import com.tonggong.libtshark.pre_processor3.bean.DecodeClazz;
+import com.tonggong.libtshark.pre_processor3.bean.GlobalArgs;
+import com.tonggong.libtshark.pre_processor3.bean.RowLayer;
 import com.tonggong.libtshark.pre_processor3.pipeline.PipeLine;
+import com.tonggong.libtshark.pre_processor3.util.PacketDecodeUtil;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.*;
-import java.util.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 
 /**
@@ -25,21 +39,15 @@ import java.util.*;
  * xxxPreProcessor3 ------------> decodeThreadPool3[xxxPacket3] -----→J
  */
 @Slf4j
-public abstract class BasePreProcessor implements PreProcessor {
+public abstract class BasePreProcessor extends TsharkConfig implements PreProcessor {
     private String filePath = null;
     private volatile boolean processRunning = true;
-    protected PipeLine pipeLine;
+    protected volatile PipeLine pipeLine;
     private String bindCommand;
     private boolean output2Console;
     private static final List<String> filterPacketName = new ArrayList<>();
     private List<String> preProcessorName;
     private Process process = null;
-    private static final TsharkProperties tsharkProperties = new TsharkProperties();
-    private static class TsharkProperties{
-        public String libpcapFilter;
-        public String tsharkSessionReset = "100000";
-        public String macAddress = "11:22:33:44:55:66";
-    }
     private int currentPreProcessId;
     private static final Set<Process> aliveTsharkProcess = new HashSet<>();
     public void setPipeline(PipeLine pipeline){
@@ -57,6 +65,7 @@ public abstract class BasePreProcessor implements PreProcessor {
             }
         }
     }
+    private DecodeClazz decodeClazz;
     private PreProcessorListener preProcessorListener;
     public void setCurrentPreProcessId(int id){
         this.currentPreProcessId = id;
@@ -76,15 +85,10 @@ public abstract class BasePreProcessor implements PreProcessor {
         this.preProcessorName = preProcessorName;
     }
 
-    static {
-        Properties properties = new Properties();
-        try {
-            properties.load(new FileInputStream(new File("config/tshark.properties")));
-            tsharkProperties.macAddress = properties.getProperty("mac_address");
-        } catch (IOException e) {
-            log.error("load tshark properties failed,use default properties : [{}]" , tsharkProperties);
-        }
+    public void setDecodeClazz(DecodeClazz decodeClazz){
+        this.decodeClazz = decodeClazz;
     }
+
 
     /**
      * tsharkPath :tshark
@@ -94,7 +98,7 @@ public abstract class BasePreProcessor implements PreProcessor {
     @Override
     public void startCapture(String iFace) {
         execCommand("tshark",tsharkProperties.macAddress,
-                iFace,null,TsharkType.ONLINE,-1);
+                iFace,pipeLine,TsharkType.ONLINE,-1);
     }
 
     /**
@@ -176,6 +180,7 @@ public abstract class BasePreProcessor implements PreProcessor {
         commandBuilder.append(" ").append(protocolFilterField().get(protocolFilterField().size() - 1));
         commandBuilder.append("\"");   // 最后的部分 + s7comm/...用于过滤
         commandBuilder.append(" -M ").append(tsharkProperties.tsharkSessionReset);    //设置n条之后重置回话
+        System.out.println(commandBuilder.toString());
         return commandBuilder.toString();
     }
 
@@ -268,7 +273,7 @@ public abstract class BasePreProcessor implements PreProcessor {
                     if (packetInJSON != null) {
                         if (packetInJSON.length() > 85) {
                             recvPacket += 1;
-                            decodeJSONString(currentPreProcessId, packetInJSON);
+                            decodeJSONString(currentPreProcessId, preDecode(currentPreProcessId, packetInJSON));
                             if (output2Console){
                                 System.out.println(packetInJSON);
                             }
@@ -359,14 +364,47 @@ public abstract class BasePreProcessor implements PreProcessor {
         return bindCommand;
     }
 
-    protected String preDecode(String jsonData,PipeLine pipeLine){
+    protected String preDecode(int currentPreProcessId, String jsonData){
         return jsonData;
     }
 
     @Override
     public void decodeJSONString(int preProcessorId, String packetJSON) {
         if (pipeLine != null){
-            pipeLine.pushDataAtHead(packetJSON);
+            //push data into pipeline
+            if (decodeClazz == null) {
+                pipeLine.pushDataAtHead(packetJSON);
+            }else{
+                try {
+                    JSONObject jsonObject = JSON.parseObject(packetJSON);
+                    JSONObject layers = (JSONObject) jsonObject.get("layers");
+                    JSONArray array = layers.getJSONArray("frame_protocols");
+                    String protocolStack = array.getString(0);
+                    String protocol = PacketDecodeUtil.discernPacket(protocolStack);
+                    Class<?> decodeClazz1;
+                    if (decodeClazz.getClasses() == null){
+                        //may be null
+                        decodeClazz1 = GlobalArgs.undefinedPacketClass;
+                    }else {
+                        if (decodeClazz.getClasses().length == 1) {
+                            decodeClazz1 = decodeClazz.getClasses()[0];
+                        } else {
+                            decodeClazz1 = decodeClazz.getClazzByProtocolStack(protocol);
+                        }
+                    }
+                    Object obj;
+                    if (decodeClazz1 != null){
+                        RowLayer rowLayer = (RowLayer) layers.toJavaObject(decodeClazz1);
+                        rowLayer.protocol = protocol;
+                        obj = rowLayer;
+                    }else {
+                        obj = layers;
+                    }
+                    pipeLine.pushDataAtHead(obj);
+                }catch (Exception e){
+                    log.error("error in decodeJSONString" , e);
+                }
+            }
         }
     }
 }

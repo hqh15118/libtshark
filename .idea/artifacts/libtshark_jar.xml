@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="libtshark:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/libtshark_jar</output-path>
+    <root id="archive" name="libtshark.jar">
+      <element id="module-output" name="libtshark" />
+    </root>
+  </artifact>
+</component>

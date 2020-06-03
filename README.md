@@ -47,7 +47,10 @@ public class Main {
         "s7comm.param.userdata.funcgroup",  // 需要输出的字段名1
         "s7comm.param.func"                 // 需要输出的字段名2
       ],
-      "showConsole": false                  // 是否将当前协议的解析结果输出到终端
+      "showConsole": false,                  // 是否将当前协议的解析结果输出到终端,
+      "clazz": [                              //解析结果会转换为class实例对象输出到pipeline进行后续处理，注意字段必须按照一定的格式使用，具体查看示例，如果没有指定，会默认输出JSONObject
+          "clazzName"
+      ]
     }
   ],
   "undefined": true,                        // 非指定协议解析

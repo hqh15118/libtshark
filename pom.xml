@@ -100,12 +100,25 @@
             <version>4.3.0</version>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/commons-codec/commons-codec -->
+        <!-- https://mvnrepository.com/artifact/org.apache.curator/curator-client -->
         <dependency>
-            <groupId>commons-codec</groupId>
-            <artifactId>commons-codec</artifactId>
-            <version>1.14</version>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-client</artifactId>
+            <version>4.3.0</version>
         </dependency>
+
+        <dependency>
+            <groupId>com.zjucsc</groupId>
+            <artifactId>zjucsc-dp-common</artifactId>
+            <version>1.0.0-RELEASES</version>
+        </dependency>
+
+        <!--        &lt;!&ndash; https://mvnrepository.com/artifact/commons-codec/commons-codec &ndash;&gt;-->
+<!--        <dependency>-->
+<!--            <groupId>commons-codec</groupId>-->
+<!--            <artifactId>commons-codec</artifactId>-->
+<!--            <version>1.14</version>-->
+<!--        </dependency>-->
 
         <!-- https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter-api -->
         <dependency>

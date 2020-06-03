@@ -1,12 +1,10 @@
 package com.tonggong.libtshark.pre_processor3.log;
 
 import lombok.extern.slf4j.Slf4j;
-import org.checkerframework.checker.units.qual.A;
 
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j

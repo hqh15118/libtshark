@@ -2,6 +2,8 @@ package com.tonggong.libtshark.pre_processor3;
 
 import com.tonggong.libtshark.pre_processor3.dumpcap.DumpcapProcess;
 import com.tonggong.libtshark.pre_processor3.dumpcap.ProcessStateMonitor;
+import com.tonggong.libtshark.pre_processor3.pipeline.AbstractAsyncHandler;
+import com.tonggong.libtshark.pre_processor3.pipeline.DefaultPipeLine;
 import org.pcap4j.core.*;
 
 public class Main {
@@ -88,12 +90,15 @@ public class Main {
 
     private static void packetAnalyzeEngineTest(){
         PacketAnalyzeEngine packetAnalyzeEngine = new PacketAnalyzeEngine();
-        packetAnalyzeEngine.setDataCallback(new PacketAnalyzeEngine.DataCallback() {
+        DefaultPipeLine defaultPipeLine = new DefaultPipeLine("default_pipeline");
+        defaultPipeLine.addLast(new AbstractAsyncHandler() {
             @Override
-            public void callback(int processId, String json) {
-
+            public Object handle(Object t) {
+                System.out.println(t);
+                return null;
             }
         });
+        packetAnalyzeEngine.setPipeline(defaultPipeLine);
         packetAnalyzeEngine.start();
     }
 }

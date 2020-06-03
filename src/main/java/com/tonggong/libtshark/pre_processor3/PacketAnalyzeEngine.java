@@ -1,9 +1,12 @@
 package com.tonggong.libtshark.pre_processor3;
 
 import com.alibaba.fastjson.JSON;
+import com.tonggong.libtshark.pre_processor3.bean.DecodeClazz;
+import com.tonggong.libtshark.pre_processor3.bean.GlobalArgs;
 import com.tonggong.libtshark.pre_processor3.bean.TsharkArgs;
 import com.tonggong.libtshark.pre_processor3.dumpcap.DumpPcapInputStream;
 import com.tonggong.libtshark.pre_processor3.dumpcap.DumpcapProcess;
+import com.tonggong.libtshark.pre_processor3.dumpcap.ProcessStateMonitor;
 import com.tonggong.libtshark.pre_processor3.log.TsharkLog;
 import com.tonggong.libtshark.pre_processor3.pipeline.PipeLine;
 import com.tonggong.libtshark.pre_processor3.tshark.BasePreProcessor;
@@ -14,8 +17,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.pcap4j.core.*;
 
 import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -29,14 +36,14 @@ public class PacketAnalyzeEngine {
     private DataCallback dataCallback;
     private static final int RESTART_PROCESS_MIN_PACKET_NUMBER = 100000,
             RESTART_PROCESS_MAX_PACKET_NUMBER = 1000000;
-    private long recvPacket = 0;
+    private static final String TSHARK_PROCESS_FILE = "config/tsharkprocess.json";
+    private long recvPacket = 0,pointRecvPacket = 0;
     private long[] lastPreProcessorRecvPacket;
     private final Object LOCK = new Object();
     private volatile boolean waiting = true;
     private volatile boolean restartAllTsharkProcessSuccessfully = true;
     private DumpcapProcess dumpcapProcess;
     private volatile boolean restarting = false;
-
     private final class DetectTask implements Runnable {
         @Override
         public void run() {
@@ -62,11 +69,36 @@ public class PacketAnalyzeEngine {
             }
             // 所有的核心tshark进程都没有分析报文，表明所有的分析进程已经结束了
             if (restart) {
-                System.out.println("2.开始重启两个进程!");
+                log.info("2.start restarting[" + basePreProcessors.length + "] processes!");
+                restarting = false;
                 for (BasePreProcessor basePreProcessor : basePreProcessors) {
                     basePreProcessThreadPool.submit(basePreProcessor::restartCapture);
                 }
-                restarting = false;
+                clearTsharkTmpFile();
+            }
+        }
+    }
+
+    private void clearTsharkTmpFile() {
+        Map<String,String> env = System.getenv();
+        String TEMP = env.get("TEMP");
+        if (TEMP == null){
+            throw new RuntimeException("not define TEMP environment variable");
+        }
+        File file = new File(TEMP);
+        if (file.exists()){
+            File[] files = file.listFiles();
+            if (files != null) {
+                for (File file1 : files) {
+                    if (file1.getName().toLowerCase().startsWith("wireshark")) {
+                        try {
+                            if (file1.delete()) {
+                                log.info("delete tshark tmp dump file successfully! name : " + file1.getName());
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
             }
         }
     }
@@ -75,19 +107,23 @@ public class PacketAnalyzeEngine {
         @Override
         public void tsharkProcessStarted(int id, Process process, String command, List<String> protocol) {
             synchronized (PacketAnalyzeEngine.class) {
-                System.out.println("3.进程 + " + protocol + " 重启成功！");
+                log.info("***********3.process + [" + protocol + "] restart successfully！***********");
                 lastPreProcessorRecvPacket[id] = -1;
-                for (long l : lastPreProcessorRecvPacket) {
+                for (int i = 0; i < lastPreProcessorRecvPacket.length; i++) {
+                    long l = lastPreProcessorRecvPacket[i];
                     if (l != -1) {
+                        log.info("wait for [{}] process restart.." , basePreProcessors[i].getPreProcessorName());
                         return;
                     }
                 }
                 Arrays.fill(lastPreProcessorRecvPacket, 0);
+                //避免notify信号丢失
                 while (!waiting) {
                     sleep(10);
                 }
-                System.out.println("4.重新激活dumpcap线程!");
+                log.info("4.resume dumpcap process!");
                 synchronized (LOCK) {
+                    restartAllTsharkProcessSuccessfully = true;
                     LOCK.notifyAll();
                 }
             }
@@ -96,13 +132,9 @@ public class PacketAnalyzeEngine {
         @Override
         public void tsharkProcessFailed(int id, Process process, String command, List<String> protocol) {
             restartAllTsharkProcessSuccessfully = false;
-            lastPreProcessorRecvPacket[id] = -1;
-            while (!waiting) {
-                sleep(10);
-            }
-            synchronized (LOCK) {
-                LOCK.notifyAll();
-            }
+            log.error("3.process [{}] restart failed,try to restart it now! command : [{}]" , process,command);
+            sleep(2000);
+            basePreProcessors[id].restartCapture();
         }
     };
 
@@ -114,10 +146,18 @@ public class PacketAnalyzeEngine {
 
     public PacketAnalyzeEngine() {
         if (!init()) {
-            log.error("load tsharkprocess.json failed , init error and exit!");
+            log.error("load 「tsharkprocess.json」 failed , init error and exit!");
             return;
         }
-        System.out.println(tsharkArgs);
+        try {
+            postInitTsharkArgs();
+        } catch (Exception e) {
+            log.error("undefinedPacket clazz instance raise error, init error and exit!" , e );
+            return;
+        }
+        log.info("********************************tshark config loaded********************************");
+        log.info(JSON.toJSONString(tsharkArgs));
+        log.info("********************************tshark config loaded********************************");
         redefineRestartProcessPacket();
         log.info("start init all tshark processes");
         try {
@@ -146,34 +186,52 @@ public class PacketAnalyzeEngine {
         registerHook();
     }
 
+    private void postInitTsharkArgs() throws Exception {
+        if (tsharkArgs.getUndefinedPacket() != null && tsharkArgs.getUndefinedPacket().length() > 0) {
+            Class<?> raw = Class.forName(tsharkArgs.getUndefinedPacket());
+            boolean find = false;
+            for (Field declaredField : raw.getDeclaredFields()) {
+                if (declaredField.getName().toLowerCase().contains("layer")){
+                    GlobalArgs.undefinedPacketClass = declaredField.getType();
+                    find = true;
+                    break;
+                }
+            }
+            if (!find){
+                throw new RuntimeException("can not find field named (*layer*) in " + tsharkArgs.getUndefinedPacket() + " clazz!");
+            }
+            if (log.isInfoEnabled()){
+                log.info("use error protocol default packet : {}" , GlobalArgs.undefinedPacketClass);
+            }
+        }else{
+            log.warn("undefined packet is not define!");
+        }
+    }
+
     private void registerHook() {
         Thread thread = new Thread(() -> {
-            System.out.println("hook start working");
+            log.info("hook start working");
             BasePreProcessor.releaseProcess();
             if (dumpcapProcess != null) {
                 dumpcapProcess.stop();
             }
             TsharkLog.release();
-            System.out.println("hook finish working");
+            log.info("hook finish working");
         });
         Runtime.getRuntime().addShutdownHook(thread);
     }
 
-    private byte[] dataHandle(DumpPcapInputStream.PacketWrapper packetWrapper) {
-        try {
-            byte[] data = packetWrapper.data;
-            int dataLen = packetWrapper.dataLen;// 数据有效长度
-            byte[] decryptBytes = SM4Utils.decryptData_ECB(ByteUtils.division(data, 14, dataLen));// 解密数据
-            byte[] mergerBytes = ByteUtils.merger(ByteUtils.division(data, 0, 14), decryptBytes);// 转发数据 = MAC头 + 解密数据
-            return mergerBytes;
-        } catch (Exception e) {
-            log.error("PacketAnalyzeEngine → initDumpcapProcess() → dataHandle(): Data decryption failed ~");
-            e.printStackTrace();
-        }
-        return new byte[]{};
-    }
 
     private boolean initDumpcapProcess() {
+        // create tmp directory
+        String tmpFileDir = tsharkArgs.getDumpcap().getTmpFile();
+        if (tmpFileDir == null || tmpFileDir.length() == 0){
+            throw new RuntimeException("you must define [dumpcap > tmpFile] directory and make sure it exits!");
+        }
+        tmpFileDir = tmpFileDir.substring(0,tmpFileDir.lastIndexOf("\\"));
+        if (Files.notExists(Paths.get(tmpFileDir))) {
+            throw new RuntimeException("you must define [dumpcap > tmpFile] directory and make sure it exits!");
+        }
         dumpcapProcess = null;
         PcapHandle pcapHandle = null;
         try {
@@ -181,25 +239,53 @@ public class PacketAnalyzeEngine {
                     tsharkArgs.getDumpcap().getTmpFile(),
                     tsharkArgs.getDumpcap().getIFace()
             );
+            //set default monitor
+            dumpcapProcess.setMonitor(new ProcessStateMonitor() {
+                @Override
+                public void start() {
+                    log.info("dumpcap process start running! (detect [CAPTURE ON XXX])");
+                }
+
+                @Override
+                public void error(Throwable e, String errorMsg) {
+                    if (e == null) {
+                        log.warn("[DUMPCAP PROCESS WARN]dumpcap process raise warn [{}]", errorMsg);
+                    }else {
+                        log.warn("[DUMPCAP PROCESS ERROR]dumpcap process raise error [{}]", errorMsg, e);
+                    }
+                }
+
+                @Override
+                public void running(String info) {
+                    log.info(info);
+                }
+
+                @Override
+                public void finish(Throwable e) {
+                    log.info("dumpcap process end , error msg => [{}]" , e == null ? "":e.getMessage(),e);
+                }
+            });
             PcapNetworkInterface pcapNetworkInterface = Pcaps.getDevByName(tsharkArgs.getIFace());
             pcapHandle = pcapNetworkInterface.openLive(65535, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 1000);
             PcapHandle finalPcapHandle = pcapHandle;
             dumpcapProcess.setDataCallback(packetWrapper -> {
                 try {
-                    if (handlePacket(packetWrapper)) {
-//                        finalPcapHandle.sendPacket(packetWrapper.data, packetWrapper.dataLen);
-                        finalPcapHandle.sendPacket(dataHandle(packetWrapper));
+                    handlePacket(packetWrapper,finalPcapHandle);
+                    ++recvPacket;
+                    ++pointRecvPacket;
+                    if (pointRecvPacket >= tsharkArgs.getPointRestartProcessPacket()){
+                        pointRecvPacket = 0;
+                        TsharkLog.log("recv point packet!");
                     }
-                    recvPacket++;
                     if (recvPacket >= tsharkArgs.getRestartProcess()) {
                         System.out.println("=======================================");
-                        System.out.println("1.接收到阈值报文数量，准备重启进程");
+                        log.info("***********1.dumpcap process recv threshold packet number，ready to restart all tshark processes!");
                         synchronized (LOCK) {
                             restartAllProcess();
                             waiting = true;
                             LOCK.wait();
                             waiting = false;
-                            System.out.println("dumpcap进程被激活！");
+                            log.info("***********5.dumpcap continue running！");
                             System.out.println("=======================================");
                             if (!restartAllTsharkProcessSuccessfully) {
                                 throw new RuntimeException("tshark restart failed!");
@@ -234,8 +320,8 @@ public class PacketAnalyzeEngine {
         restarting = true;
     }
 
-    protected boolean handlePacket(DumpPcapInputStream.PacketWrapper packetWrapper) {
-        return true;
+    protected void handlePacket(DumpPcapInputStream.PacketWrapper packetWrapper, PcapHandle pcapHandle) throws NotOpenException, PcapNativeException {
+        pcapHandle.sendPacket(packetWrapper.data,packetWrapper.dataLen);
     }
 
     private void initBaseProcessors() {
@@ -249,7 +335,7 @@ public class PacketAnalyzeEngine {
         //init restart arg
         lastPreProcessorRecvPacket = new long[processNumber];
 
-        //init pool
+        //init thread pool
         basePreProcessThreadPool = new ThreadPoolExecutor(
                 processNumber * 2,
                 processNumber * 2,
@@ -261,17 +347,17 @@ public class PacketAnalyzeEngine {
                     thread.setName("-base-processor-" + id.getAndIncrement());
                     return thread;
                 },
-                new RejectedExecutionHandler() {
-                    @Override
-                    public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-                        log.error("can not submit BasePreProcess task to thread pool!");
-                    }
-                }
+                (r, executor) -> log.error("can not submit BasePreProcess task to thread pool!")
         );
 
         basePreProcessors = new BasePreProcessor[processNumber];
         for (int i = 0; i < tsharkArgs.getArgs().size(); i++) {
-            doInitBaseProcessors(i);
+            try {
+                doInitBaseProcessors(i);
+            } catch (ClassNotFoundException e) {
+                BasePreProcessor.releaseProcess();
+                throw new RuntimeException("can not find decode clazz",e);
+            }
         }
 
         if (tsharkArgs.isUndefined()) {
@@ -292,6 +378,8 @@ public class PacketAnalyzeEngine {
         basePreProcessors[processNumber - 1] = undefinedPreProcessor;
         undefinedPreProcessor.setPreProcessorListener(preProcessorListener);
         undefinedPreProcessor.setCurrentPreProcessId(processNumber - 1);
+        DecodeClazz decodeClazz = new DecodeClazz(null,null);
+        undefinedPreProcessor.setDecodeClazz(decodeClazz);
     }
 
     public void start() {
@@ -314,7 +402,7 @@ public class PacketAnalyzeEngine {
         void callback(int processId, String json);
     }
 
-    private void doInitBaseProcessors(int id) {
+    private void doInitBaseProcessors(int id) throws ClassNotFoundException {
         TsharkArgs.Args args = tsharkArgs.getArgs().get(id);
         BasePreProcessor basePreProcessor = new BasePreProcessor() {
             @Override
@@ -340,6 +428,21 @@ public class PacketAnalyzeEngine {
         basePreProcessor.setOutput2Console(tsharkArgs.getArgs().get(id).isShowConsole());
         basePreProcessor.setPreProcessorListener(preProcessorListener);
         basePreProcessor.setCurrentPreProcessId(id);
+        String[] protocols = new String[args.getProtocol().size()];
+        args.getProtocol().toArray(protocols);
+
+        String[] decodeClazzNames = tsharkArgs.getArgs().get(id).getClazz();
+        if (decodeClazzNames == null || decodeClazzNames.length == 0){
+            log.warn("[{}] decode PACKET not defines" , tsharkArgs.getArgs().get(id).getProtocol());
+            return;
+        }
+        Class<?>[] clazz = new Class[decodeClazzNames.length];
+        int index = 0;
+        for (String decodeClazzName : decodeClazzNames) {
+            clazz[index] = Class.forName(decodeClazzName);
+            index++;
+        }
+        basePreProcessor.setDecodeClazz(new DecodeClazz(protocols,clazz));
     }
 
     public void setPipeline(PipeLine pipeline) {
@@ -363,7 +466,7 @@ public class PacketAnalyzeEngine {
 
     private boolean init() {
         try {
-            tsharkArgs = initTsharkArgs();
+            tsharkArgs = preInitTsharkArgs();
         } catch (Exception e) {
             e.printStackTrace();
             return false;
@@ -372,12 +475,14 @@ public class PacketAnalyzeEngine {
             return true;
         }
         StringBuilder jsonReader = new StringBuilder();
-        try (BufferedReader buffReader = new BufferedReader(new InputStreamReader
-                (new FileInputStream(new File("config/tsharkprocess.json"))))) {
+        try (BufferedReader buffReader = new BufferedReader(new InputStreamReader(new FileInputStream(TSHARK_PROCESS_FILE)))) {
             for (; ; ) {
                 String data = buffReader.readLine();
                 if (data == null) {
                     break;
+                }
+                if (data.startsWith("//")){//ignore //
+                    continue;
                 }
                 jsonReader.append(data);
             }
@@ -389,7 +494,11 @@ public class PacketAnalyzeEngine {
         return false;
     }
 
-    protected TsharkArgs initTsharkArgs() throws Exception {
+    protected TsharkArgs preInitTsharkArgs() throws Exception {
         return null;
+    }
+
+    public void setDumpcapProcessMonitor(ProcessStateMonitor processMonitor){
+        dumpcapProcess.setMonitor(processMonitor);
     }
 }
